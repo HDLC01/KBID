@@ -1,0 +1,23 @@
+.git
+.venv
+venv
+__pycache__
+*.pyc
+.pytest_cache
+node_modules
+.playwright-mcp
+Info Sheet
+*.dc.html
+support.js
+doc-page.js
+ios-frame.jsx
+_ds
+.thumbnail
+backend/.env
+*.env
+!backend/.env.example
+data
+generated
+*.pdf
+*.mp4
+shot_*.jpeg

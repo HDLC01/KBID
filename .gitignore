@@ -1,0 +1,53 @@
+# --- secrets / env ---
+.env
+*.env
+!*.env.example
+backend/.env
+backend/*.env
+!backend/.env.example
+
+# --- python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env39/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# --- node ---
+node_modules/
+npm-debug.log*
+
+# --- build / runtime artifacts ---
+*.log
+dist/
+build/
+data/                 # local Postgres volume, generated files
+generated/            # generated .docx / .pdf output
+*.docx.tmp
+*.pdf.tmp
+
+# --- os / editor ---
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# --- test/screenshot scratch ---
+.playwright-mcp/
+*-screenshot*.png
+kbid-*.png
+shot_*.jpeg
+Info Sheet/
+*.dc.html
+doc-page.js
+support.js
+ios-frame.jsx
+_ds/
+.thumbnail
+
+# --- claude design bundle runtime (kept as reference, not app code) ---
+# (design/ bundle intentionally NOT ignored — it is the approved UI reference)
