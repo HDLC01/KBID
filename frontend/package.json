@@ -1,0 +1,7 @@
+{
+  "name": "kbid-estimate-workbook",
+  "private": true,
+  "dependencies": {
+    "hyperformula": "2.7.1"
+  }
+}

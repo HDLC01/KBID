@@ -25,6 +25,7 @@ class PhaseIn(BaseModel):
 
 class EstimateIn(BaseModel):
     phases: list[PhaseIn] = Field(default_factory=list)
+    roles: list[str] = Field(default_factory=lambda: list(ce.ROLES))
     rate_set: str = "current"                     # current | legacy | custom
     rates: dict[str, float] | None = None         # used when rate_set == "custom"
     meeting_role: str = "design_director"
@@ -51,6 +52,7 @@ async def compute(body: EstimateIn, user=Depends(require_user)) -> dict:
             ce.Phase(p.name, p.duration_weeks, p.meetings, dict(p.hours_per_week))
             for p in body.phases
         ],
+        roles=list(body.roles),
         rates=_resolve_rates(body),
         meeting_role=body.meeting_role,
         contingency_pct=body.contingency_pct,

@@ -65,6 +65,7 @@ class Phase:
 @dataclass
 class EstimateInput:
     phases: list[Phase]
+    roles: list[str] = field(default_factory=lambda: list(ROLES))
     rates: dict[str, float] = field(default_factory=lambda: dict(CURRENT_RATES))
     meeting_role: str = "design_director"       # meeting fee billed at this role's rate
     contingency_pct: float = 0.0
@@ -87,7 +88,7 @@ def compute(inp: EstimateInput) -> dict:
         role_lines: dict[str, dict] = {}
         phase_hours = 0.0
         phase_fee = 0.0
-        for role in ROLES:
+        for role in inp.roles:
             wph = float(p.hours_per_week.get(role, 0.0) or 0.0)
             hrs = p.duration_weeks * wph
             fee = hrs * float(rates.get(role, 0.0))

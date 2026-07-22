@@ -20,6 +20,8 @@ COPY backend/requirements.txt /app/requirements.txt
 RUN pip install --no-cache-dir -r /app/requirements.txt
 
 COPY backend/ /app/
+COPY frontend/package.json /app/frontend/package.json
+RUN npm install --omit=dev --ignore-scripts --prefix /app/frontend
 COPY frontend/ /app/frontend/
 
 ENV FRONTEND_DIR=/app/frontend PORT=8902 APP_ENV=prod
