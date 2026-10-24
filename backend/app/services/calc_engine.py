@@ -134,6 +134,8 @@ def compute(inp: EstimateInput) -> dict:
 
     return {
         "phases": phases_out,
+        "roles": list(inp.roles),           # role order/ids actually used (incl. custom rows)
+        "rates": dict(rates),               # rate actually used per role, for the proposal's printed rate table
         "total_hours": total_hours,
         "total_fee_raw": total_fee_raw,
         "design_fee_rounded": design_fee_rounded,

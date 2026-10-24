@@ -19,10 +19,14 @@ docker save "$IMAGE" | gzip | ssh "${VPS_USER}@${VPS_HOST}" "gunzip | docker loa
 echo "==> [3/4] sync compose file"
 ssh "${VPS_USER}@${VPS_HOST}" "mkdir -p ${APP_DIR}/backend"
 scp docker-compose.yml "${VPS_USER}@${VPS_HOST}:${APP_DIR}/docker-compose.yml"
-# backend/.env (prod Clerk keys, POSTGRES_PASSWORD, DEV_AUTH_BYPASS=0) is provisioned
-# on the VPS ONCE at ${APP_DIR}/backend/.env — never shipped from a dev machine.
+# backend/.env (prod Clerk keys, POSTGRES_PASSWORD, DEV_AUTH_BYPASS=0, and
+# CLAUDE_CODE_OAUTH_TOKEN — see README.md's Deploy section; without it the
+# Proposal section silently fails) is provisioned on the VPS ONCE at
+# ${APP_DIR}/backend/.env — never shipped from a dev machine.
 
 echo "==> [4/4] up (no --build) + health check"
 ssh "${VPS_USER}@${VPS_HOST}" "cd ${APP_DIR} && docker compose up -d"
 ssh "${VPS_USER}@${VPS_HOST}" "sleep 4 && curl -fsS http://127.0.0.1:8902/healthz && echo '  <- healthy'"
 echo "==> done. Public URL fronted by nginx: https://kbid.wetreadwell.com"
+echo "==> verify claude auth if the Proposal section was ever broken:"
+echo "      ssh ${VPS_USER}@${VPS_HOST} docker exec kbid-proposal-tool claude -p 'say ok'"

@@ -18,6 +18,8 @@ from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from docx.shared import Inches, Pt, RGBColor
 
+from .calc_engine import CURRENT_RATES, ROLE_LABELS
+
 ASSETS = Path(__file__).resolve().parent.parent / "assets"
 INK = RGBColor(0x1A, 0x1A, 0x1A)
 GRAY = RGBColor(0x6F, 0x68, 0x58)
@@ -172,10 +174,19 @@ def _fees_block(doc, sec):
                 total += float(cons[key]); last_alloc = label
                 _fee_line(doc, label, _money(cons[key]), rule=(label == last_alloc))
         _fee_line(doc, "Total Design Fee", _money(total), bold=True, rule=(last_alloc is None))
-    # rate table
+    # rate table — reflects the rate set / per-role overrides / custom rows the
+    # user actually used for this estimate; falls back to the current standard
+    # rates for older saved drafts computed before "rates"/"roles" were tracked.
     _mini_heading(doc, "Interior Design Rate Table")
-    for label, rate in (("Owner", 210), ("Design Director", 200), ("Interior Designer", 170), ("Designer", 150)):
-        _fee_line(doc, label, f"${rate} / hr")
+    rates = est.get("rates") or CURRENT_RATES
+    roles = est.get("roles") or list(rates.keys())
+    role_labels = sec.get("role_labels") or {}
+    for role_id in roles:
+        rate = rates.get(role_id)
+        if rate is None:
+            continue
+        label = role_labels.get(role_id) or ROLE_LABELS.get(role_id) or role_id.replace("_", " ").title()
+        _fee_line(doc, label, f"${int(round(rate))} / hr")
 
 
 def _fmt_num(n):

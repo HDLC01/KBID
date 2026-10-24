@@ -27,6 +27,8 @@ services:
       FRONTEND_DIR: /app/frontend
       DATABASE_URL: postgresql://${POSTGRES_USER:-kbid}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-kbid}
       DEV_AUTH_BYPASS: "0"
+    volumes:
+      - claude_credentials:/root/.claude   # survives redeploys; see README's Deploy section
     depends_on:
       db:
         condition: service_healthy
@@ -35,3 +37,4 @@ services:
 
 volumes:
   kbid_db:
+  claude_credentials:

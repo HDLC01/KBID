@@ -186,6 +186,9 @@ def build_sections(state: dict, prose: dict | None = None) -> dict:
         "estimate": (state.get("estimate", {}) or {}).get("result"),
         "fee_mode": (state.get("estimate", {}) or {}).get("feeMode", "lump"),
         "consultants": (state.get("estimate", {}) or {}).get("consultants", {}),
+        # custom-row display names (e.g. "Junior Designer") for the rate table;
+        # base roles fall back to calc_engine.ROLE_LABELS if not present here.
+        "role_labels": (state.get("estimate", {}) or {}).get("rowLabels", {}),
     }
 
 

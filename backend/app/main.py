@@ -6,6 +6,7 @@ Run locally:  uvicorn app.main:app --reload --port 8902   (from backend/)
 from __future__ import annotations
 
 import logging
+import shutil
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -54,7 +55,18 @@ def healthz() -> dict:
         db_ok = db.healthcheck()
     except Exception:  # noqa: BLE001
         db_ok = False
-    return {"ok": True, "app": "kbid-proposal-tool", "env": settings.app_env, "db": db_ok}
+    # Cheap presence check only (binary on PATH) — does NOT confirm `claude` is
+    # authenticated, so a proposal-generation call can still fail even when this
+    # is true. Kept cheap deliberately: this endpoint is polled every 30s by the
+    # Docker healthcheck, and a real `claude -p` call takes seconds and costs money.
+    claude_bin_found = shutil.which(settings.claude_bin) is not None
+    return {
+        "ok": True,
+        "app": "kbid-proposal-tool",
+        "env": settings.app_env,
+        "db": db_ok,
+        "claude_bin": claude_bin_found,
+    }
 
 
 @app.get("/api/config")

@@ -106,3 +106,68 @@ async def restore_draft(draft_id: str, user=Depends(require_user)) -> dict:
         conn.execute("update drafts set deleted_at=null where id=%s", (draft_id,))
     db.log_event(draft_id, user["email"], "restored")
     return {"ok": True}
+
+
+@router.get("/trash")
+async def list_trash(user=Depends(require_user), page: int = Query(1, ge=1)) -> dict:
+    """Soft-deleted drafts, newest-trashed first (for the Trash view)."""
+    offset = (page - 1) * PAGE_SIZE
+    with db.get_pool().connection() as conn:
+        total = conn.execute("select count(*) from drafts where deleted_at is not null").fetchone()[0]
+        rows = conn.execute(
+            "select id, title, status, owner_email, updated_at, deleted_at "
+            "from drafts where deleted_at is not null "
+            "order by deleted_at desc limit %s offset %s",
+            (PAGE_SIZE, offset),
+        ).fetchall()
+    return {
+        "page": page,
+        "page_size": PAGE_SIZE,
+        "total": total,
+        "items": [
+            {
+                "id": r[0],
+                "title": r[1],
+                "status": r[2],
+                "owner_email": r[3],
+                "updated_at": r[4].isoformat() if r[4] else None,
+                "deleted_at": r[5].isoformat() if r[5] else None,
+            }
+            for r in rows
+        ],
+    }
+
+
+@router.get("/history")
+async def list_history(user=Depends(require_user), limit: int = Query(100, ge=1, le=200)) -> dict:
+    """Recent activity feed (created / updated / generated / trashed / restored / feedback),
+    newest first, with the draft title joined in for readable rows."""
+    with db.get_pool().connection() as conn:
+        rows = conn.execute(
+            "select e.kind, e.actor_email, e.detail, e.at, e.draft_id, d.title "
+            "from events e left join drafts d on d.id = e.draft_id "
+            "order by e.at desc limit %s",
+            (limit,),
+        ).fetchall()
+    return {
+        "items": [
+            {
+                "kind": r[0],
+                "actor_email": r[1],
+                "detail": r[2],
+                "at": r[3].isoformat() if r[3] else None,
+                "draft_id": r[4],
+                "title": r[5],
+            }
+            for r in rows
+        ]
+    }
+
+
+@router.delete("/draft/{draft_id}")
+async def delete_draft(draft_id: str, user=Depends(require_user)) -> dict:
+    """Permanent hard-delete (Trash view 'Delete forever'). Soft trash/restore are separate."""
+    with db.get_pool().connection() as conn:
+        conn.execute("delete from drafts where id=%s", (draft_id,))
+    db.log_event(None, user["email"], "deleted", draft_id)
+    return {"ok": True}

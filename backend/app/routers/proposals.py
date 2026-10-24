@@ -14,6 +14,7 @@ from pydantic import BaseModel
 from .. import db
 from ..auth import require_user
 from ..services import docx_builder, indesign_export, proposal_gen
+from ..services.claude_cli import ClaudeUnavailable
 
 router = APIRouter(prefix="/api/proposal", tags=["proposal"])
 
@@ -47,8 +48,30 @@ def _save_sections(draft_id: str, state: dict, sections: dict, actor: str) -> No
     db.log_event(draft_id, actor, "generated")
 
 
-def _sections_for(state: dict) -> dict:
-    return (state.get("proposal") or {}).get("sections") or proposal_gen.generate(state)
+def _generate_or_502(state: dict) -> dict:
+    """Call Claude for the narrative; turn an auth/binary/timeout failure into a
+    clear 502 instead of the old behavior of silently returning a near-blank
+    "successful" proposal (which is indistinguishable from working in the UI)."""
+    try:
+        return proposal_gen.generate(state)
+    except ClaudeUnavailable as e:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Claude narrative generation failed on the server: {e}. "
+                   "Check that `claude` is authenticated in the deployed container "
+                   "(CLAUDE_CODE_OAUTH_TOKEN) — see README.md's Deploy section.",
+        )
+
+
+def _sections_for(draft_id: str, state: dict, actor: str) -> dict:
+    """Reuse already-generated sections if present; otherwise generate once and
+    persist them, so repeated downloads don't re-invoke Claude on every click."""
+    existing = (state.get("proposal") or {}).get("sections")
+    if existing:
+        return existing
+    sections = _generate_or_502(state)
+    _save_sections(draft_id, state, sections, actor)
+    return sections
 
 
 def _filename(sections: dict, ext: str) -> str:
@@ -79,14 +102,15 @@ def _docx_to_pdf(docx_bytes: bytes) -> bytes | None:
 @router.post("/generate")
 async def generate(body: GenIn, user=Depends(require_user)) -> dict:
     state = _load_state(body.draft_id)
-    sections = proposal_gen.generate(state)
+    sections = _generate_or_502(state)
     _save_sections(body.draft_id, state, sections, user["email"])
     return {"ok": True, "sections": sections}
 
 
 @router.post("/docx")
 async def docx(body: GenIn, user=Depends(require_user)) -> Response:
-    sections = _sections_for(_load_state(body.draft_id))
+    state = _load_state(body.draft_id)
+    sections = _sections_for(body.draft_id, state, user["email"])
     data = docx_builder.build_docx(sections)
     return Response(
         content=data,
@@ -97,7 +121,8 @@ async def docx(body: GenIn, user=Depends(require_user)) -> Response:
 
 @router.post("/pdf")
 async def pdf(body: GenIn, user=Depends(require_user)) -> Response:
-    sections = _sections_for(_load_state(body.draft_id))
+    state = _load_state(body.draft_id)
+    sections = _sections_for(body.draft_id, state, user["email"])
     data = _docx_to_pdf(docx_builder.build_docx(sections))
     if data is None:
         raise HTTPException(status_code=501, detail="PDF conversion unavailable (LibreOffice not installed here).")
@@ -118,7 +143,8 @@ async def feedback(body: FeedbackIn, user=Depends(require_user)) -> dict:
 @router.post("/indesign")
 async def indesign(body: GenIn, user=Depends(require_user)) -> Response:
     """InDesign Tagged Text — Kali Places this into KBID's own InDesign template."""
-    sections = _sections_for(_load_state(body.draft_id))
+    state = _load_state(body.draft_id)
+    sections = _sections_for(body.draft_id, state, user["email"])
     txt = indesign_export.build_tagged_text(sections)
     return Response(
         content=txt.encode("utf-8"),

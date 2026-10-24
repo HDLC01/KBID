@@ -17,6 +17,14 @@ log = logging.getLogger("kbid.claude")
 settings = get_settings()
 
 
+class ClaudeUnavailable(Exception):
+    """Raised when `claude -p` could not be run at all (missing binary, not
+    authenticated, timed out) — as opposed to running fine but returning a
+    thin/empty result. Callers use this to distinguish "Claude is broken" from
+    "Claude legitimately had little to say", instead of both looking identical.
+    """
+
+
 def call_claude(prompt: str, system: str = "", timeout: int = 150) -> str:
     args = [settings.claude_bin, "-p", "--output-format", "json"]
     if settings.claude_model:
@@ -35,13 +43,26 @@ def call_claude(prompt: str, system: str = "", timeout: int = 150) -> str:
             errors="replace",
             shell=False,
         )
+    except FileNotFoundError as e:
+        log.error("claude binary not found (CLAUDE_BIN=%r): %s", settings.claude_bin, e)
+        raise ClaudeUnavailable(f"claude binary not found: {e}") from e
+    except subprocess.TimeoutExpired as e:
+        log.error("claude call timed out after %ss", timeout)
+        raise ClaudeUnavailable(f"claude timed out after {timeout}s") from e
     except Exception as e:  # noqa: BLE001
-        log.warning("claude call failed: %s", e)
-        return ""
+        log.error("claude call failed: %s", e)
+        raise ClaudeUnavailable(str(e)) from e
+
+    if proc.returncode != 0:
+        stderr = (proc.stderr or "").strip()[:400]
+        log.error("claude exited %s (likely not authenticated): %s", proc.returncode, stderr)
+        raise ClaudeUnavailable(f"claude exited {proc.returncode}: {stderr}")
+
     out = (proc.stdout or "").strip()
     if not out:
-        log.warning("claude returned empty (stderr: %s)", (proc.stderr or "")[:200])
-        return ""
+        stderr = (proc.stderr or "").strip()[:400]
+        log.error("claude returned empty stdout (exit 0). stderr: %s", stderr)
+        raise ClaudeUnavailable(f"claude returned empty output: {stderr}")
     try:
         data = json.loads(out)
         if isinstance(data, dict) and "result" in data:

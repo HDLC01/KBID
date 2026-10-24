@@ -10,6 +10,8 @@ begins with <pstyle:NAME>; \\, < and > are escaped; \\t is a tab.
 """
 from __future__ import annotations
 
+from .calc_engine import CURRENT_RATES, ROLE_LABELS
+
 _SMART = [("“", '"'), ("”", '"'), ("‘", "'"), ("’", "'"),
           ("—", "-"), ("–", "-"), ("…", "...")]
 
@@ -105,8 +107,15 @@ def build_tagged_text(sec: dict) -> str:
                 total += float(cons[key]); fee(label, _money(cons[key]))
         fee("Total Design Fee", _money(total))
     p("KBID_MiniHead", "Interior Design Rate Table")
-    for label, rate in (("Owner", 210), ("Design Director", 200), ("Interior Designer", 170), ("Designer", 150)):
-        fee(label, f"${rate} / hr")
+    rates = est.get("rates") or CURRENT_RATES
+    roles = est.get("roles") or list(rates.keys())
+    role_labels = sec.get("role_labels") or {}
+    for role_id in roles:
+        rate = rates.get(role_id)
+        if rate is None:
+            continue
+        label = role_labels.get(role_id) or ROLE_LABELS.get(role_id) or role_id.replace("_", " ").title()
+        fee(label, f"${int(round(rate))} / hr")
 
     # standard closing sections
     p("KBID_Subhead", "Payment"); p("KBID_Body", sec.get("payment", ""))

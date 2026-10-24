@@ -83,6 +83,11 @@
   let CONFIG = { devAuthBypass: true, clerkPublishableKey: "" };
   let TOKEN = null;
   let SAVE_STATE = "idle"; // idle | saving | saved
+  // ---- global nav / views (app-level UI state, NOT part of the per-draft S) ----
+  let VIEW = "wizard"; // wizard | projects | trash | history
+  let NAV_OPEN = (localStorage.getItem("kbid.nav") ?? (window.innerWidth >= 820 ? "1" : "0")) === "1";
+  let LIST = { projects: null, trash: null, history: null };
+  let SEARCH = "";
   const freshState = () => ({
     draftId: null,
     stage: "intake",
@@ -99,11 +104,29 @@
   let S = freshState();
 
   // ---------- API ----------
+  // Clerk session tokens are short-lived (~60s). getToken() returns a cached
+  // token and transparently refreshes it when near expiry, so we ask per request
+  // instead of reusing the one captured at sign-in — that stale token 401s once
+  // the page has been open a minute (e.g. clicking a nav view after idling).
+  async function freshToken() {
+    try {
+      if (window.Clerk && window.Clerk.session) {
+        const t = await window.Clerk.session.getToken();
+        if (t) { TOKEN = t; return t; }
+      }
+    } catch {}
+    return TOKEN; // dev bypass (no Clerk) or a transient getToken failure
+  }
   async function api(path, opts = {}) {
     const headers = Object.assign({ "Content-Type": "application/json" }, opts.headers || {});
-    if (TOKEN) headers["Authorization"] = "Bearer " + TOKEN;
+    const t = await freshToken();
+    if (t) headers["Authorization"] = "Bearer " + t;
     const res = await fetch(path, Object.assign({}, opts, { headers }));
-    if (!res.ok) throw new Error(path + " -> " + res.status);
+    if (!res.ok) {
+      let detail = "";
+      try { detail = (await res.json()).detail || ""; } catch {}
+      throw new Error(detail ? `${detail} (${res.status})` : `${path} -> ${res.status}`);
+    }
     const ct = res.headers.get("content-type") || "";
     return ct.includes("application/json") ? res.json() : res.text();
   }
@@ -137,7 +160,8 @@
   }
   async function downloadFile(path, body) {
     const headers = { "Content-Type": "application/json" };
-    if (TOKEN) headers["Authorization"] = "Bearer " + TOKEN;
+    const t = await freshToken();
+    if (t) headers["Authorization"] = "Bearer " + t;
     const res = await fetch(path, { method: "POST", headers, body: JSON.stringify(body) });
     if (!res.ok) { let msg = res.status; try { msg = (await res.json()).detail || msg; } catch {} alert("Download failed: " + msg); return; }
     const blob = await res.blob();
@@ -160,13 +184,29 @@
     render();
   }
 
+  // Deep-fill missing keys from `def` without dropping any loaded data. Guards the
+  // Projects "open any draft" path: an older/partial draft that lacks newer intake
+  // fields (e.g. `phases`) keeps the fresh defaults instead of arriving undefined.
+  function withDefaults(data, def) {
+    if (Array.isArray(def)) return Array.isArray(data) ? data : def.slice();
+    if (def && typeof def === "object") {
+      const src = (data && typeof data === "object") ? data : {};
+      const out = Object.assign({}, def, src);
+      for (const key in def) {
+        if (def[key] && typeof def[key] === "object") out[key] = withDefaults(src[key], def[key]);
+      }
+      return out;
+    }
+    return data === undefined ? def : data;
+  }
+
   async function loadOrCreateDraft() {
     const url = new URL(location.href);
     let id = url.searchParams.get("d") || localStorage.getItem("kbid.draftId");
     if (id) {
       try {
         const d = await api("/api/draft/" + encodeURIComponent(id));
-        if (d && d.data) { S = Object.assign(freshState(), d.data); S.draftId = id; }
+        if (d && d.data) { S = withDefaults(d.data, freshState()); S.draftId = id; }
       } catch (e) { /* stale id -> new draft */ id = null; }
     }
     if (!S.draftId) {
@@ -179,21 +219,32 @@
   }
 
   // ---------- Clerk (prod gate; skipped under dev bypass) ----------
+  function authFailure(message) {
+    app().innerHTML = `<div class="center-screen"><div class="mark">KBID</div><h1 class="title">Proposal Generator</h1><p class="lede">${esc(message)}</p><button class="btn primary" onclick="location.reload()">Retry</button></div>`;
+  }
   function frontendApiFromPk(pk) {
-    try { const b64 = pk.split("_", 3)[2]; return atob(b64 + "===").replace(/\$$/, ""); } catch { return ""; }
+    try {
+      const b64 = pk.split("_", 3)[2];
+      const pad = (4 - (b64.length % 4)) % 4;   // 0/1/2 '=' — NEVER a fixed 3, or atob throws
+      return atob(b64 + "=".repeat(pad)).replace(/\$$/, "");
+    } catch { return ""; }
   }
   async function initClerk(pk) {
     const host = frontendApiFromPk(pk);
-    if (!host) return true;
-    await new Promise((resolve, reject) => {
+    if (!host) { authFailure("Couldn't determine the Clerk host from the publishable key."); return false; }
+    let loaded = true;
+    await new Promise((resolve) => {
       const s = document.createElement("script");
       s.setAttribute("data-clerk-publishable-key", pk);
       s.async = true; s.crossOrigin = "anonymous";
       s.src = `https://${host}/npm/@clerk/clerk-js@5/dist/clerk.browser.js`;
-      s.onload = resolve; s.onerror = reject;
+      s.onload = resolve; s.onerror = () => { loaded = false; resolve(); };
       document.head.appendChild(s);
-    }).catch(() => null);
-    if (!window.Clerk) return true;
+    });
+    // Fail CLOSED, not open: if the Clerk script/library never materializes,
+    // show a clear error instead of letting the user into an unauthenticated
+    // shell whose every real action would silently 401.
+    if (!loaded || !window.Clerk) { authFailure("Sign-in could not load. Check your connection and refresh."); return false; }
     await window.Clerk.load();
     if (window.Clerk.user) {
       try { TOKEN = await window.Clerk.session.getToken(); } catch {}
@@ -210,18 +261,167 @@
     const a = app();
     a.removeAttribute("aria-busy");
     a.innerHTML = `
-      <div class="app-shell">
+      ${sidebarHTML()}
+      <div class="kbid-backdrop ${NAV_OPEN ? "show" : ""}" data-action="closeNav"></div>
+      <div class="kbid-content ${NAV_OPEN ? "nav-open" : ""}">
+        ${VIEW === "wizard" ? wizardHTML() : listShellHTML()}
+      </div>`;
+    if (VIEW === "wizard") {
+      if (S.stage === "estimate") {
+        ensureEstimateWorkbookState();
+        requestAnimationFrame(() => { decorateEstimateSheet(); recalculateSheetFormulas(); });
+        scheduleCompute();
+      }
+      if (S.stage === "intake") requestAnimationFrame(revealActiveIntakeStep);
+      setSave(SAVE_STATE);
+    } else {
+      loadListInto(VIEW);
+    }
+  }
+
+  function wizardHTML() {
+    return `<div class="app-shell">
         ${headerHTML()}
         <main class="content ${S.stage === "estimate" ? "wide" : ""}">${screenHTML()}</main>
         ${footerHTML()}
       </div>`;
-    if (S.stage === "estimate") {
-      ensureEstimateWorkbookState();
-      requestAnimationFrame(() => { decorateEstimateSheet(); recalculateSheetFormulas(); });
-      scheduleCompute();
+  }
+
+  // ---------- global sidebar (Projects nav) ----------
+  function initials(name, email) {
+    const s = (name || email || "?").trim(); const p = s.split(/\s+/);
+    const two = ((p[0] && p[0][0]) || "") + ((p[1] && p[1][0]) || "");
+    return (two || s[0] || "?").toUpperCase();
+  }
+  function userInfo() {
+    const cu = (window.Clerk && window.Clerk.user) || null;
+    if (cu) {
+      const email = (cu.primaryEmailAddress && cu.primaryEmailAddress.emailAddress) || "";
+      const name = cu.fullName || cu.firstName || email || "Signed in";
+      return { name, email, initials: initials(name, email), canSignOut: true };
     }
-    if (S.stage === "intake") requestAnimationFrame(revealActiveIntakeStep);
-    setSave(SAVE_STATE);
+    return { name: "Dev user", email: CONFIG.devAuthBypass ? "dev bypass" : "", initials: "K", canSignOut: false };
+  }
+  function sidebarHTML() {
+    const item = (view, glyph, label) =>
+      `<button class="kbid-nav-item ${VIEW === view ? "active" : ""}" data-action="openView" data-view="${view}">
+        <span class="kbid-nav-ico">${glyph}</span><span>${label}</span></button>`;
+    const u = userInfo();
+    return `<aside class="kbid-sidebar ${NAV_OPEN ? "open" : ""}" aria-label="Primary">
+      <div class="kbid-brand">
+        <span class="kbid-logo">K</span>
+        <span class="kbid-brandtext"><span class="kbid-brandname">KBID</span><span class="kbid-brandsub">Proposal Generator</span></span>
+        <button class="kbid-collapse" data-action="toggleNav" title="Hide menu" aria-label="Hide menu">‹</button>
+      </div>
+      <nav class="kbid-nav">
+        <div class="kbid-navsection">Workspace</div>
+        ${item("wizard", "✎", "Editor")}
+        ${item("projects", "▦", "Projects")}
+        ${item("history", "⟲", "History")}
+        ${item("trash", "🗑", "Trash")}
+      </nav>
+      <div class="kbid-user">
+        <span class="kbid-avatar">${esc(u.initials)}</span>
+        <span class="kbid-userinfo"><span class="kbid-username">${esc(u.name)}</span><span class="kbid-useremail">${esc(u.email)}</span></span>
+        ${u.canSignOut ? `<button class="kbid-signout" data-action="signOut" title="Sign out" aria-label="Sign out">⏻</button>` : ""}
+      </div>
+    </aside>`;
+  }
+
+  // ---------- list views (Projects / Trash / History) ----------
+  function fmtDate(iso) { if (!iso) return "—"; try { return new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" }); } catch { return "—"; } }
+  function fmtDateTime(iso) { if (!iso) return ""; try { const d = new Date(iso); return d.toLocaleDateString(undefined, { month: "short", day: "numeric" }) + " · " + d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" }); } catch { return ""; } }
+  function statusClass(s) { return ({ draft: "is-draft", generated: "is-generated", sent: "is-sent", signed: "is-signed" })[s] || "is-draft"; }
+
+  function viewWrap(title, actionHTML, toolsHTML) {
+    return `<div class="view-wrap">
+      <div class="view-head">
+        <button class="kbid-burger" data-action="toggleNav" aria-label="Menu">☰</button>
+        <h1 class="view-title">${esc(title)}</h1>
+        <div class="view-actions">${actionHTML || ""}</div>
+      </div>
+      ${toolsHTML || ""}
+      <div id="kbid-list" class="kbid-list loading">Loading…</div>
+    </div>`;
+  }
+  function listShellHTML() {
+    if (VIEW === "projects") return viewWrap("Projects",
+      `<button class="btn primary" data-action="newProposal">+ New proposal</button>`,
+      `<div class="view-tools"><input type="search" id="kbid-search" class="kbid-search" placeholder="Search proposals…" value="${esc(SEARCH)}" /></div>`);
+    if (VIEW === "trash") return viewWrap("Trash", "", "");
+    if (VIEW === "history") return viewWrap("History", "", "");
+    return "";
+  }
+  async function loadListInto(view) {
+    const el = document.getElementById("kbid-list"); if (!el) return;
+    try {
+      if (view === "projects") { LIST.projects = (await api("/api/drafts")).items || []; paintProjects(); }
+      else if (view === "trash") { LIST.trash = (await api("/api/trash")).items || []; paintTrash(); }
+      else if (view === "history") { LIST.history = (await api("/api/history")).items || []; paintHistory(); }
+    } catch (e) {
+      el.className = "kbid-list"; el.innerHTML = `<p class="lede">Couldn't load: ${esc(e.message)}</p>`;
+    }
+  }
+  function paintProjects() {
+    const el = document.getElementById("kbid-list"); if (!el) return;
+    let items = LIST.projects || [];
+    const q = SEARCH.trim().toLowerCase();
+    if (q) items = items.filter((p) => `${p.title || ""} ${p.owner_email || ""} ${p.status || ""}`.toLowerCase().includes(q));
+    if (!items.length) { el.className = "kbid-list"; el.innerHTML = `<p class="lede">${(LIST.projects || []).length ? "No proposals match your search." : "No proposals yet. Click “+ New proposal” to start."}</p>`; return; }
+    el.className = "kbid-cards";
+    el.innerHTML = items.map((p) => `
+      <div class="proj-card ${p.id === S.draftId ? "current" : ""}">
+        <div class="proj-top"><span class="pill ${statusClass(p.status)}">${esc(p.status || "draft")}</span>${p.id === S.draftId ? '<span class="proj-open-tag">open</span>' : ""}</div>
+        <button class="proj-name" data-action="openProject" data-id="${esc(p.id)}">${esc(p.title || "Untitled proposal")}</button>
+        <div class="proj-meta">by ${esc(p.owner_email || "—")}</div>
+        <div class="proj-meta">updated ${esc(fmtDate(p.updated_at))}</div>
+        <div class="proj-foot">
+          <button class="btn ghost danger-text" data-action="trashProject" data-id="${esc(p.id)}">Trash</button>
+          <button class="btn" data-action="openProject" data-id="${esc(p.id)}">Open →</button>
+        </div>
+      </div>`).join("");
+  }
+  function paintTrash() {
+    const el = document.getElementById("kbid-list"); if (!el) return;
+    const items = LIST.trash || [];
+    if (!items.length) { el.className = "kbid-list"; el.innerHTML = `<p class="lede">Trash is empty.</p>`; return; }
+    el.className = "kbid-cards";
+    el.innerHTML = items.map((p) => `
+      <div class="proj-card is-trashed">
+        <div class="proj-top"><span class="pill is-draft">${esc(p.status || "draft")}</span></div>
+        <div class="proj-name plain">${esc(p.title || "Untitled proposal")}</div>
+        <div class="proj-meta">by ${esc(p.owner_email || "—")}</div>
+        <div class="proj-meta">trashed ${esc(fmtDate(p.deleted_at))}</div>
+        <div class="proj-foot">
+          <button class="btn ghost danger-text" data-action="deleteForever" data-id="${esc(p.id)}">Delete forever</button>
+          <button class="btn" data-action="restoreProject" data-id="${esc(p.id)}">↩ Restore</button>
+        </div>
+      </div>`).join("");
+  }
+  function paintHistory() {
+    const el = document.getElementById("kbid-list"); if (!el) return;
+    const items = LIST.history || [];
+    if (!items.length) { el.className = "kbid-list"; el.innerHTML = `<p class="lede">No activity yet.</p>`; return; }
+    const verb = { created: "created", updated: "edited", generated: "generated a proposal for", trashed: "trashed", restored: "restored", deleted: "deleted", feedback: "left feedback on" };
+    el.className = "kbid-activity";
+    el.innerHTML = items.map((ev) => {
+      const who = (ev.actor_email || "someone").split("@")[0];
+      const what = ev.title || ev.detail || ev.draft_id || "";
+      return `<div class="act-row">
+        <span class="act-dot ${esc(ev.kind || "")}"></span>
+        <div class="act-body">
+          <span class="act-main"><b>${esc(who)}</b> ${esc(verb[ev.kind] || ev.kind || "did something")} ${esc(what)}</span>
+          <span class="act-time">${esc(fmtDateTime(ev.at))}</span>
+        </div>
+      </div>`;
+    }).join("");
+  }
+  function closeNavOnMobile() { if (window.innerWidth < 821) NAV_OPEN = false; }
+  async function openProject(id) {
+    const url = new URL(location.href); url.searchParams.set("d", id); history.replaceState(null, "", url.toString());
+    localStorage.setItem("kbid.draftId", id);
+    await loadOrCreateDraft();
+    VIEW = "wizard"; closeNavOnMobile(); render();
   }
 
   function revealActiveIntakeStep() {
@@ -240,7 +440,7 @@
         ${i < STAGES.length - 1 ? '<span class="stage-sep"></span>' : ""}</li>`;
     }).join("");
     return `<header class="topbar"><div class="topbar-inner">
-      <div class="brand"><span class="mark">KBID</span><span class="sub">Proposal Generator</span></div>
+      <button class="kbid-burger" data-action="toggleNav" aria-label="Menu">☰</button>
       <nav class="stages" aria-label="Stages"><ol>${items}</ol>
         <div class="mobile-stage">Stage ${idx + 1} of 4 · <b>${STAGES[idx].label}</b></div></nav>
       <div class="topbar-right"><span class="save-ind"><span class="save-dot"></span><span class="save-label">Not saved yet</span></span></div>
@@ -962,6 +1162,7 @@
       aiEstimate: () => { alert("AI estimate auto-fill (claude -p) lands in the next build phase."); },
       genProposal: async () => {
         if (GENERATING) return;
+        if (!S.estimate.result && !confirm("The estimate hasn't been computed yet, so the fee table will be empty. Generate anyway?")) return;
         await saveImmediate();
         GENERATING = true; render();
         try {
@@ -981,8 +1182,21 @@
         catch (e) { alert("Could not send feedback: " + e.message); }
       },
       uploadFinal: () => alert("Upload-and-diff (compare your edited .docx to the generated draft) lands in a later phase."),
+      // ---- global nav / projects ----
+      openView: () => { VIEW = d.view; SEARCH = ""; closeNavOnMobile(); render(); },
+      toggleNav: () => { NAV_OPEN = !NAV_OPEN; localStorage.setItem("kbid.nav", NAV_OPEN ? "1" : "0"); render(); },
+      closeNav: () => { NAV_OPEN = false; render(); },
+      openProject: async () => { await openProject(d.id); },
+      newProposal: () => { const id = uuid(); S = freshState(); S.draftId = id; localStorage.setItem("kbid.draftId", id); const u = new URL(location.href); u.searchParams.set("d", id); history.replaceState(null, "", u); VIEW = "wizard"; closeNavOnMobile(); touch(); render(); },
+      trashProject: async () => { try { await api(`/api/draft/${encodeURIComponent(d.id)}/trash`, { method: "POST" }); await loadListInto("projects"); } catch (e) { alert("Couldn't trash: " + e.message); } },
+      restoreProject: async () => { try { await api(`/api/draft/${encodeURIComponent(d.id)}/restore`, { method: "POST" }); await loadListInto("trash"); } catch (e) { alert("Couldn't restore: " + e.message); } },
+      deleteForever: async () => { if (!confirm("Delete this proposal permanently? This cannot be undone.")) return; try { await api(`/api/draft/${encodeURIComponent(d.id)}`, { method: "DELETE" }); await loadListInto("trash"); } catch (e) { alert("Couldn't delete: " + e.message); } },
+      signOut: async () => { if (window.Clerk) { try { await window.Clerk.signOut(); } catch {} location.href = "/"; } },
     };
     if (actions[a]) actions[a]();
+  });
+  document.addEventListener("input", (e) => {
+    if (e.target && e.target.id === "kbid-search") { SEARCH = e.target.value; paintProjects(); }
   });
   function toggleArr(arr, id) { const i = arr.indexOf(id); if (i >= 0) arr.splice(i, 1); else arr.push(id); }
 

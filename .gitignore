@@ -40,6 +40,9 @@ Thumbs.db
 .playwright-mcp/
 *-screenshot*.png
 kbid-*.png
+
+# --- demo / walkthrough videos (large binaries, not app code) ---
+*.mp4
 shot_*.jpeg
 Info Sheet/
 *.dc.html

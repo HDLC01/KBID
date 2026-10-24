@@ -53,7 +53,27 @@ VPS_HOST=your-server deploy/ship.sh  # docker build -> save|ssh load -> compose 
 Prereqs on the VPS: `/opt/kbid/backend/.env` with prod Clerk keys, a strong
 `POSTGRES_PASSWORD`, and `DEV_AUTH_BYPASS=0`; nginx block (`deploy/nginx.conf`) + certbot.
 
+**One-time Claude auth (required for the Proposal section to work at all).**
+Proposal generation shells out to `claude -p` inside the container. Without this
+step every "Generate proposal" click either times out or silently returns a
+near-blank proposal (see `backend/app/services/claude_cli.py`'s `ClaudeUnavailable`
+error, visible in `docker logs kbid-proposal-tool`, and `/healthz`'s `claude_bin`
+field for a quick presence check):
+```bash
+# on a machine already logged in to Claude Code:
+claude setup-token
+# add the printed token to /opt/kbid/backend/.env on the VPS:
+echo 'CLAUDE_CODE_OAUTH_TOKEN=...' >> /opt/kbid/backend/.env
+# then (re)deploy — docker-compose.yml's env_file passes it straight into the
+# container, and `claude` reads it with no interactive login needed.
+```
+`docker-compose.yml` also mounts a persistent `claude_credentials` volume for
+`/root/.claude`, so an interactive `docker exec -it kbid-proposal-tool claude login`
+(fallback path) survives redeploys too — but the token above is the primary,
+non-interactive method and doesn't require re-doing anything on every deploy.
+
 ## Status
-- ✅ P1 scaffold + Clerk (backend) + Postgres · ✅ P2 intake + live estimate calculator
-- ⏳ P3 proposal generation (`claude -p` narrative + reverse-engineered KBID `.docx`/PDF template)
-- ⏳ P4 InDesign-ready export · ⏳ P5 deploy · ⏳ P6 feedback loop
+- Done: P1 scaffold + Clerk (backend) + Postgres · P2 intake + live estimate calculator
+- Done: P3 proposal generation (`claude -p` narrative + reverse-engineered KBID `.docx`/PDF template)
+- Done: P4 InDesign-ready export · P5 deployed to kbid.wetreadwell.com
+- Pending: P6 feedback loop (Option B: upload-and-diff)
