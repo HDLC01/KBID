@@ -4,7 +4,9 @@
 #
 # The default target is the `treadwell-vps` alias in ~/.ssh/config, which supplies the
 # host, port, user and key. It logs in as a non-root user and the box runs every
-# command (and scp) as root via sudo. VPS_HOST / VPS_USER still override it.
+# command (and scp) as root via sudo. VPS_HOST alone names a Host entry from
+# ~/.ssh/config; to aim at a raw address also set VPS_USER (there is no root@ default
+# and no -i knob, so the key must come from ssh's defaults or an agent).
 set -euo pipefail
 
 VPS_HOST="${VPS_HOST:-treadwell-vps}"

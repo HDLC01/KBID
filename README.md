@@ -50,8 +50,9 @@ Build off-box, ship prebuilt — **never build on the VPS**:
 ```bash
 deploy/ship.sh  # docker build -> save|ssh load -> compose up -d
 ```
-The script targets the `treadwell-vps` alias in `~/.ssh/config` (set `VPS_HOST` /
-`VPS_USER` to aim elsewhere). The alias logs in as a non-root user and the box runs
+The script targets the `treadwell-vps` alias in `~/.ssh/config`. `VPS_HOST` alone must
+name another Host entry there; to aim at a raw address also set `VPS_USER`, since there
+is no `root@` default any more. The alias logs in as a non-root user and the box runs
 every command as root via sudo.
 Prereqs on the VPS: `/opt/kbid/backend/.env` with prod Clerk keys, a strong
 `POSTGRES_PASSWORD`, and `DEV_AUTH_BYPASS=0`; nginx block (`deploy/nginx.conf`) + certbot.
