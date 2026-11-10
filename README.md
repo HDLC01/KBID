@@ -48,8 +48,11 @@ Verify the calc engine against the Switzer workbook:
 ## Deploy (kbid.wetreadwell.com)
 Build off-box, ship prebuilt — **never build on the VPS**:
 ```bash
-VPS_HOST=your-server deploy/ship.sh  # docker build -> save|ssh load -> compose up -d
+deploy/ship.sh  # docker build -> save|ssh load -> compose up -d
 ```
+The script targets the `treadwell-vps` alias in `~/.ssh/config` (set `VPS_HOST` /
+`VPS_USER` to aim elsewhere). The alias logs in as a non-root user and the box runs
+every command as root via sudo.
 Prereqs on the VPS: `/opt/kbid/backend/.env` with prod Clerk keys, a strong
 `POSTGRES_PASSWORD`, and `DEV_AUTH_BYPASS=0`; nginx block (`deploy/nginx.conf`) + certbot.
 
